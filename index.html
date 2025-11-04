@@ -5,9 +5,13 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
   <title>Hangar 94</title>
   <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="preconnect" href="https://www.youtube-nocookie.com">
+  <link rel="preconnect" href="https://img.youtube.com">
+  <!-- YouTube IFrame API -->
+  <script src="https://www.youtube.com/iframe_api"></script>
 </head>
 <body class="bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white min-h-screen flex flex-col items-center py-10">
-  <img src="img/hangar.png" alt="Hangar 94 Logo" class="w-auto h-40  mb-6" />
+  <img src="img/hangar.png" alt="Hangar 94 Logo" class="w-auto h-40 mb-6" />
   <h1 class="text-4xl text-center font-bold mb-2">🎧 Reproductor Musica Karaoke</h1>
   <p class="text-gray-400 mb-8">Gestiona tu lista de reproducción personal</p>
 
@@ -30,7 +34,6 @@
     <p class="text-gray-500 mt-2">Agrega tu primera canción pegando un enlace de YouTube arriba</p>
   </div>
 
- 
   <!-- Lista de canciones -->
   <div class="w-full max-w-4xl px-4">
     <div id="songListHeader" class="flex items-center justify-between mb-4 hidden">
@@ -55,29 +58,31 @@
         <h3 class="text-2xl font-bold mb-2" id="modalTitle">Reproducir Video</h3>
         <p class="text-gray-400" id="modalUrl"></p>
       </div>
+
       <div class="aspect-video bg-black rounded-lg overflow-hidden mb-4">
-        <iframe
-          id="modalPlayer"
-          class="w-full h-full"
-          src=""
-          frameborder="0"
-          allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
-          allowfullscreen>
-        </iframe>
+        <!-- IMPORTANTE: dejamos que la API cree el iframe aquí -->
+        <div id="modalPlayer" class="w-full h-full"></div>
       </div>
-      <div class="flex gap-3 justify-end">
-        <a id="openYouTube" href="#" target="_blank" 
-           class="bg-red-600 hover:bg-red-700 px-6 py-3 rounded-lg font-semibold transition">
-          🎬 Abrir en YouTube
-        </a>
-        <button id="closeModalBtn" class="bg-gray-600 hover:bg-gray-700 px-6 py-3 rounded-lg font-semibold transition">
-          Cerrar
-        </button>
+
+      <div class="flex flex-wrap gap-3 justify-between">
+        <div class="flex gap-3">
+          <button id="prevBtn" class="bg-gray-700 hover:bg-gray-600 px-4 py-3 rounded-lg font-semibold transition">⏮️ Anterior</button>
+          <button id="nextBtn" class="bg-gray-700 hover:bg-gray-600 px-4 py-3 rounded-lg font-semibold transition">⏭️ Siguiente</button>
+        </div>
+        <div class="flex gap-3">
+          <a id="openYouTube" href="#" target="_blank" class="bg-red-600 hover:bg-red-700 px-6 py-3 rounded-lg font-semibold transition">
+            🎬 Abrir en YouTube
+          </a>
+          <button id="closeModalBtn" class="bg-gray-600 hover:bg-gray-700 px-6 py-3 rounded-lg font-semibold transition">
+            Cerrar
+          </button>
+        </div>
       </div>
     </div>
   </div>
 
   <script>
+    // --- Referencias UI ---
     const addBtn = document.getElementById('addBtn');
     const clearBtn = document.getElementById('clearBtn');
     const playAllBtn = document.getElementById('playAllBtn');
@@ -86,20 +91,50 @@
     const songCount = document.getElementById('songCount');
     const emptyState = document.getElementById('emptyState');
     const songListHeader = document.getElementById('songListHeader');
-    
-    // Modal
+
     const modal = document.getElementById('modal');
-    const modalPlayer = document.getElementById('modalPlayer');
     const modalTitle = document.getElementById('modalTitle');
     const modalUrl = document.getElementById('modalUrl');
     const openYouTube = document.getElementById('openYouTube');
     const closeModal = document.getElementById('closeModal');
     const closeModalBtn = document.getElementById('closeModalBtn');
+    const prevBtn = document.getElementById('prevBtn');
+    const nextBtn = document.getElementById('nextBtn');
 
+    // --- Estado ---
     let songs = [];
     let draggedIndex = null;
+    let currentIndex = -1;
 
-    // Extraer ID de YouTube
+    // YT Player
+    let ytPlayer = null;
+    let firstPlayMuted = true; // primera reproducción muteada para evitar bloqueos
+
+    // La API llama a esta función global cuando está lista
+    window.onYouTubeIframeAPIReady = function () {
+      ytPlayer = new YT.Player('modalPlayer', {
+        host: 'https://www.youtube-nocookie.com',
+        playerVars: {
+          rel: 0,
+          modestbranding: 1,
+          playsinline: 1,
+          autoplay: 1, // respetado si hubo interacción (abrir modal)
+        },
+        events: {
+          onReady: (e) => {
+            // Nada por ahora; cargamos los videos vía playIndex
+          },
+          onStateChange: (e) => {
+            // Avanzar cuando termine el video actual
+            if (e.data === YT.PlayerState.ENDED) {
+              nextVideo();
+            }
+          }
+        }
+      });
+    };
+
+    // --- Utilidades YouTube ---
     function extractVideoId(url) {
       try {
         const u = new URL(url);
@@ -111,10 +146,6 @@
       return m ? m[1] : null;
     }
 
-    function buildEmbedUrl(videoId) {
-      return `https://www.youtube-nocookie.com/embed/${videoId}?autoplay=1&rel=0&modestbranding=1`;
-    }
-
     function buildWatchUrl(videoId) {
       return `https://www.youtube.com/watch?v=${videoId}`;
     }
@@ -124,16 +155,12 @@
       return `https://www.youtube.com/watch_videos?video_ids=${songs.map(s => s.id).join(',')}`;
     }
 
+    // --- Lista ---
     function addSongFromUrl(url) {
       const id = extractVideoId(url);
-      if (!id) {
-        alert('⚠️ Enlace de YouTube no válido. Asegúrate de pegar un enlace completo.');
-        return;
-      }
-      if (songs.find(s => s.id === id)) {
-        alert('ℹ️ Esta canción ya está en tu lista.');
-        return;
-      }
+      if (!id) return alert('⚠️ Enlace de YouTube no válido. Asegúrate de pegar un enlace completo.');
+      if (songs.find(s => s.id === id)) return alert('ℹ️ Esta canción ya está en tu lista.');
+
       songs.push({ id, createdAt: Date.now() });
       renderList();
       youtubeLink.value = '';
@@ -142,51 +169,102 @@
 
     function removeSong(index) {
       songs.splice(index, 1);
+      // Ajustar currentIndex si corresponde
+      if (currentIndex >= songs.length) currentIndex = songs.length - 1;
       renderList();
     }
 
     function moveSong(fromIndex, toIndex) {
       const [movedSong] = songs.splice(fromIndex, 1);
       songs.splice(toIndex, 0, movedSong);
+      if (currentIndex === fromIndex) currentIndex = toIndex;
       renderList();
     }
 
-    function moveUp(index) {
-      if (index === 0) return;
-      moveSong(index, index - 1);
-    }
+    function moveUp(index) { if (index > 0) moveSong(index, index - 1); }
+    function moveDown(index) { if (index < songs.length - 1) moveSong(index, index + 1); }
 
-    function moveDown(index) {
-      if (index === songs.length - 1) return;
-      moveSong(index, index + 1);
-    }
+    // --- Modal / Reproducción ---
+    function openModalByIndex(index) {
+      if (index < 0 || index >= songs.length) return;
+      currentIndex = index;
 
-    function openModal(id) {
+      const id = songs[currentIndex].id;
       const watchUrl = buildWatchUrl(id);
-      modalPlayer.src = buildEmbedUrl(id);
-      modalTitle.textContent = `Video ${songs.findIndex(s => s.id === id) + 1}`;
+
+      modalTitle.textContent = `Video #${currentIndex + 1}`;
       modalUrl.textContent = watchUrl;
       openYouTube.href = watchUrl;
+
       modal.classList.remove('hidden');
       modal.classList.add('flex');
+
+      // Cargar y reproducir con IFrame API
+      playIndex(currentIndex);
     }
 
     function closeModalFn() {
-      modalPlayer.src = '';
+      if (ytPlayer) {
+        try { ytPlayer.stopVideo(); } catch {}
+      }
       modal.classList.add('hidden');
       modal.classList.remove('flex');
     }
 
+    function playIndex(index) {
+      if (!ytPlayer || index < 0 || index >= songs.length) return;
+      const id = songs[index].id;
+
+      // Carga y reproduce
+      ytPlayer.loadVideoById({ videoId: id });
+
+      // Primera reproducción muteada para evitar bloqueos; luego desmutea
+      if (firstPlayMuted) {
+        ytPlayer.mute();
+        // Intenta desmutear pasados unos ms (ya hubo interacción del usuario)
+        setTimeout(() => { try { ytPlayer.unMute(); } catch {} }, 600);
+        firstPlayMuted = false;
+      }
+    }
+
+    function nextVideo() {
+      if (currentIndex < songs.length - 1) {
+        currentIndex += 1;
+        playIndex(currentIndex);
+        updateModalHeader();
+      } else {
+        // Fin de lista
+        closeModalFn();
+      }
+    }
+
+    function prevVideo() {
+      if (currentIndex > 0) {
+        currentIndex -= 1;
+        playIndex(currentIndex);
+        updateModalHeader();
+      }
+    }
+
+    function updateModalHeader() {
+      if (currentIndex >= 0) {
+        const id = songs[currentIndex].id;
+        modalTitle.textContent = `Video #${currentIndex + 1}`;
+        modalUrl.textContent = buildWatchUrl(id);
+        openYouTube.href = buildWatchUrl(id);
+      }
+    }
+
+    // --- Pintado de la lista ---
     function renderList() {
       songList.innerHTML = '';
       songCount.textContent = `(${songs.length})`;
-      
+
       if (songs.length === 0) {
         emptyState.classList.remove('hidden');
         songListHeader.classList.add('hidden');
         return;
       }
-      
       emptyState.classList.add('hidden');
       songListHeader.classList.remove('hidden');
 
@@ -203,7 +281,7 @@
           <button class="w-full text-left flex flex-col group">
             <div class="relative">
               <img src="${thumb}" alt="thumbnail" class="w-full h-40 object-cover">
-              <div class="absolute inset-0 bg-black bg-opacity-0 group-hover:bg-opacity-50 transition flex items-center justify-center">
+              <div class="absolute inset-0 bg-black/0 group-hover:bg-black/50 transition flex items-center justify-center">
                 <span class="text-6xl opacity-0 group-hover:opacity-100 transition">▶️</span>
               </div>
               <div class="absolute top-2 left-2 bg-purple-600 text-white px-3 py-1 rounded-full font-bold text-sm">
@@ -219,106 +297,65 @@
             </div>
           </button>
           <div class="flex gap-2 p-4 pt-0">
-            <button class="bg-gray-600 hover:bg-gray-500 px-3 py-2 rounded-lg transition moveUpBtn ${index === 0 ? 'opacity-50 cursor-not-allowed' : ''}" ${index === 0 ? 'disabled' : ''} title="Mover arriba">
-              ⬆️
-            </button>
-            <button class="bg-gray-600 hover:bg-gray-500 px-3 py-2 rounded-lg transition moveDownBtn ${index === songs.length - 1 ? 'opacity-50 cursor-not-allowed' : ''}" ${index === songs.length - 1 ? 'disabled' : ''} title="Mover abajo">
-              ⬇️
-            </button>
-            <a href="${watchUrl}" target="_blank" 
-               class="flex-1 bg-red-600 hover:bg-red-700 py-2 rounded-lg text-center font-semibold transition">
-              🎬 YouTube
-            </a>
-            <button class="bg-purple-600 hover:bg-purple-700 px-4 py-2 rounded-lg font-semibold transition playModalBtn">
-              ▶️
-            </button>
-            <button class="bg-gray-600 hover:bg-red-600 px-4 py-2 rounded-lg transition removeBtn" title="Eliminar">
-              🗑️
-            </button>
+            <button class="bg-gray-600 hover:bg-gray-500 px-3 py-2 rounded-lg transition moveUpBtn ${index === 0 ? 'opacity-50 cursor-not-allowed' : ''}" ${index === 0 ? 'disabled' : ''} title="Mover arriba">⬆️</button>
+            <button class="bg-gray-600 hover:bg-gray-500 px-3 py-2 rounded-lg transition moveDownBtn ${index === songs.length - 1 ? 'opacity-50 cursor-not-allowed' : ''}" ${index === songs.length - 1 ? 'disabled' : ''} title="Mover abajo">⬇️</button>
+            <a href="${watchUrl}" target="_blank" class="flex-1 bg-red-600 hover:bg-red-700 py-2 rounded-lg text-center font-semibold transition">🎬 YouTube</a>
+            <button class="bg-purple-600 hover:bg-purple-700 px-4 py-2 rounded-lg font-semibold transition playModalBtn">▶️</button>
+            <button class="bg-gray-600 hover:bg-red-600 px-4 py-2 rounded-lg transition removeBtn" title="Eliminar">🗑️</button>
           </div>
         `;
 
-        // Eventos de click
-        li.querySelector('button').addEventListener('click', () => openModal(s.id));
-        li.querySelector('.playModalBtn').addEventListener('click', (e) => {
-          e.stopPropagation();
-          openModal(s.id);
-        });
-        li.querySelector('.removeBtn').addEventListener('click', (e) => {
-          e.stopPropagation();
-          removeSong(index);
-        });
-        li.querySelector('.moveUpBtn').addEventListener('click', (e) => {
-          e.stopPropagation();
-          moveUp(index);
-        });
-        li.querySelector('.moveDownBtn').addEventListener('click', (e) => {
-          e.stopPropagation();
-          moveDown(index);
-        });
+        // Clicks
+        li.querySelector('button').addEventListener('click', () => openModalByIndex(index));
+        li.querySelector('.playModalBtn').addEventListener('click', (e) => { e.stopPropagation(); openModalByIndex(index); });
+        li.querySelector('.removeBtn').addEventListener('click', (e) => { e.stopPropagation(); removeSong(index); });
+        li.querySelector('.moveUpBtn').addEventListener('click', (e) => { e.stopPropagation(); moveUp(index); });
+        li.querySelector('.moveDownBtn').addEventListener('click', (e) => { e.stopPropagation(); moveDown(index); });
 
-        // Eventos de drag & drop
-        li.addEventListener('dragstart', (e) => {
-          draggedIndex = index;
-          li.classList.add('dragging');
-        });
-
-        li.addEventListener('dragend', (e) => {
-          li.classList.remove('dragging');
-          draggedIndex = null;
-        });
-
-        li.addEventListener('dragover', (e) => {
-          e.preventDefault();
-          li.classList.add('drag-over');
-        });
-
-        li.addEventListener('dragleave', (e) => {
-          li.classList.remove('drag-over');
-        });
-
+        // Drag & drop
+        li.addEventListener('dragstart', () => { draggedIndex = index; li.classList.add('dragging'); });
+        li.addEventListener('dragend', () => { li.classList.remove('dragging'); draggedIndex = null; });
+        li.addEventListener('dragover', (e) => { e.preventDefault(); li.classList.add('drag-over'); });
+        li.addEventListener('dragleave', () => { li.classList.remove('drag-over'); });
         li.addEventListener('drop', (e) => {
           e.preventDefault();
           li.classList.remove('drag-over');
-          if (draggedIndex !== null && draggedIndex !== index) {
-            moveSong(draggedIndex, index);
-          }
+          if (draggedIndex !== null && draggedIndex !== index) moveSong(draggedIndex, index);
         });
 
         songList.appendChild(li);
       });
     }
 
-    // Eventos
+    // --- Eventos generales ---
     addBtn.addEventListener('click', () => {
       const link = youtubeLink.value.trim();
       if (link) addSongFromUrl(link);
     });
 
-    youtubeLink.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter') addBtn.click();
-    });
+    youtubeLink.addEventListener('keydown', (e) => { if (e.key === 'Enter') addBtn.click(); });
 
     clearBtn.addEventListener('click', () => {
       if (songs.length === 0) return;
       if (confirm('🗑️ ¿Eliminar todas las canciones de la lista?')) {
         songs = [];
+        currentIndex = -1;
         renderList();
       }
     });
 
     playAllBtn.addEventListener('click', () => {
-      const playlistUrl = buildPlaylistUrl();
-      if (playlistUrl) {
-        window.open(playlistUrl, '_blank');
-      }
+      if (songs.length === 0) return;
+      openModalByIndex(0); // abre modal y empieza desde la primera
     });
 
-    closeModal.addEventListener('click', closeModalFn);
-    closeModalBtn.addEventListener('click', closeModalFn);
-    modal.addEventListener('click', (e) => {
-      if (e.target === modal) closeModalFn();
-    });
+    // Controles del modal
+    document.getElementById('closeModal').addEventListener('click', closeModalFn);
+    document.getElementById('closeModalBtn').addEventListener('click', closeModalFn);
+    modal.addEventListener('click', (e) => { if (e.target === modal) closeModalFn(); });
+
+    prevBtn.addEventListener('click', (e) => { e.stopPropagation(); prevVideo(); });
+    nextBtn.addEventListener('click', (e) => { e.stopPropagation(); nextVideo(); });
 
     // Inicializar
     renderList();
